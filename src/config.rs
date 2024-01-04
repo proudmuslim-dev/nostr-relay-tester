@@ -1,18 +1,18 @@
 use std::{ops::Deref, path::PathBuf, str::FromStr};
 
+use crate::{tests::report::TestReport, NostrClient};
 use clap::Parser;
 use clap_serde_derive::ClapSerde;
 use color_eyre::eyre::anyhow;
-use lazy_static::lazy_static;
 use nostr::{secp256k1::SecretKey, FromBech32};
+use nostr_sdk::Relay;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 const DEFAULT_PRIVATE_KEY: &str = "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsmhltgl";
 
-lazy_static! {
-    pub static ref DEFAULT_CONFIG_PATH: PathBuf = PathBuf::from("nostr-relay-tester.toml");
-}
+pub static DEFAULT_CONFIG_PATH: Lazy<PathBuf> = Lazy::new(|| PathBuf::from("nostr-relay-tester.toml"));
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -39,7 +39,7 @@ pub struct Config {
     #[arg(short, long, help = "64-character bech32-encoded private key", default_value = DEFAULT_PRIVATE_KEY)]
     pub key: NostrKeys,
     #[arg(short, long, value_delimiter = ',', default_value = "nip01,nip09")]
-    pub nips: Vec<Nips>,
+    pub nips: Vec<Nips>, // Cannot make this a HashSet due to trait bounds
 }
 
 #[derive(Clone)]
@@ -84,6 +84,25 @@ impl<'de> Deserialize<'de> for NostrKeys {
 pub enum Nips {
     Nip01,
     Nip09,
+}
+
+impl Nips {
+    pub async fn test(&self, client: &NostrClient, relay: &Relay) -> TestReport {
+        /// If you hate this, blame [Tricked](https://github.com/Tricked-dev/) for encouraging me
+        macro_rules! match_and_test {
+            ($($number:literal )*) => {
+                paste::paste! {
+                    match self {
+                        $(
+                            Nips::[<Nip $number>] => crate::tests::[<nip $number>]::test(client, relay).await,
+                        )*
+                    }
+                }
+            }
+        }
+
+        match_and_test!(01 09)
+    }
 }
 
 impl FromStr for Nips {

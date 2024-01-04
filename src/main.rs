@@ -2,7 +2,8 @@ use clap::Parser;
 use clap_serde_derive::ClapSerde;
 use color_eyre::eyre::anyhow;
 use nostr_relay_tester::{
-    config::{CliArgs, Config, Nips, DEFAULT_CONFIG_PATH},
+    config::{CliArgs, Config, DEFAULT_CONFIG_PATH},
+    tests::report::TestReport,
     NostrClient,
 };
 use tokio::{fs::File, io::AsyncReadExt};
@@ -14,7 +15,8 @@ async fn main() -> color_eyre::Result<()> {
     tracing_subscriber::fmt::init();
 
     let mut args = CliArgs::parse();
-    let config = match File::open(&args.config_path).await {
+
+    let Config { key, nips, relay_url } = match File::open(&args.config_path).await {
         Ok(mut f) => {
             let mut cfg_str = "".to_owned();
             f.read_to_string(&mut cfg_str).await?;
@@ -30,21 +32,17 @@ async fn main() -> color_eyre::Result<()> {
         Err(e) => Err(e)?,
     };
 
-    if config.relay_url.is_none() {
-        return Err(anyhow!("Relay URL must be specified!"));
-    }
+    let relay_url = relay_url.ok_or(anyhow!("Relay URL must be specified!"))?;
 
-    let client = NostrClient::new(&config.key);
-
-    client.add_relay(config.relay_url.unwrap().as_str()).await?;
+    let client = NostrClient::new(&key);
+    client.add_relay(relay_url.as_str()).await?;
     client.connect().await;
 
-    for nip in config.nips {
-        use nostr_relay_tester::{nip01, nip09};
-        match nip {
-            Nips::Nip01 => nip01::test(&client).await,
-            Nips::Nip09 => nip09::test(&client).await,
-        }
+    let relay = client.relay(relay_url.as_str()).await?;
+    let mut results: Vec<TestReport> = vec![];
+
+    for nip in nips {
+        results.push(nip.test(&client, &relay).await);
     }
 
     Ok(())
