@@ -10,10 +10,19 @@ use crate::{config::Config, tests::report::TestReport};
 pub async fn run(Config { key, nips, relay_url }: Config) -> eyre::Result<Vec<TestReport>> {
     use crate::NostrClient;
     use eyre::anyhow;
+    use nostr_sdk::client::Options as NostrClientOptions;
 
     let relay_url = relay_url.ok_or(anyhow!("Relay URL must be specified!"))?;
 
-    let client = NostrClient::new(&key);
+    let client = {
+        let options = NostrClientOptions::new()
+            .wait_for_connection(true)
+            .wait_for_send(true)
+            .wait_for_subscription(true)
+            .shutdown_on_drop(true);
+
+        NostrClient::with_opts(&key, options)
+    };
     client.add_relay(relay_url.as_str()).await?;
     client.connect().await;
 
@@ -28,8 +37,6 @@ pub async fn run(Config { key, nips, relay_url }: Config) -> eyre::Result<Vec<Te
 }
 
 mod prelude {
-    use color_eyre::eyre;
-
     pub use crate::{
         config::Nips,
         tests::report::{Errors, TestReport},
@@ -40,7 +47,9 @@ mod prelude {
     pub use nostr_sdk::{Relay, RelayPoolNotification};
     pub use tracing::{info, span, warn, Level};
 
-    pub(super) fn log_and_store_error(err: eyre::Error, errors_vec: &mut Vec<eyre::Error>) {
+    use color_eyre::eyre;
+
+    pub(super) fn log_and_store_error(err: eyre::Error, errors_vec: &mut Errors) {
         tracing::error!("{err}");
         errors_vec.push(err);
     }

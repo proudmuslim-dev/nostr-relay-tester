@@ -24,11 +24,11 @@ version = "1"
 features = ["rt-multi-thread", "fs"]
 
 [dependencies.clap] 
-version = "4.4.12"
+version = "4.4.13"
 features = ["derive"] 
 
 [dependencies.serde] 
-version = "1.0.194" 
+version = "1.0.195"
 features = ["derive"]
 
 [dependencies.url]
