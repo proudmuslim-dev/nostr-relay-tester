@@ -1,30 +1,20 @@
-use color_eyre::eyre::anyhow;
-use nostr::{
-    secp256k1::XOnlyPublicKey, ClientMessage, EventId, JsonUtil, Kind, RelayMessage, SubscriptionId, Timestamp,
-};
-use nostr_sdk::{Client as NostrClient, InternalSubscriptionId, Relay, RelayPoolNotification};
+use nostr::{secp256k1::XOnlyPublicKey, Kind, SubscriptionId, Timestamp};
+use nostr_sdk::{InternalSubscriptionId, RelayPoolNotification};
 use once_cell::sync::Lazy;
 use tokio::sync::broadcast::Receiver;
-use tracing::{info, span, Level};
 
-use crate::{
-    config::Nips,
-    tests::{
-        log_and_store_error,
-        report::{Errors, TestReport},
-    },
-};
+use crate::tests::prelude::*;
 
 static PUBLISH_TEST_INTERNAL_SUBSCRIPTION_ID: Lazy<SubscriptionId> = Lazy::new(|| SubscriptionId::new("publish_test"));
 
 pub async fn test(client: &NostrClient, relay: &Relay) -> TestReport {
-    let span = span!(Level::INFO, "nip01: publishing event");
-    let _s = span.enter();
+    let span = span!(Level::INFO, "nip01: publishing event").entered();
 
     let mut errors = vec![];
 
-    let external_subscription_id =
+    let external_subscription: Option<(SubscriptionId, Timestamp)> =
         test_establish_publish_subscription(relay, client.keys().await.public_key(), &mut errors).await;
+
     let published_id = match client.publish_text_note("nostr-relay-tester: nip01", vec![]).await {
         Ok(id) => {
             info!("successfully published: {id}");
@@ -36,14 +26,23 @@ pub async fn test(client: &NostrClient, relay: &Relay) -> TestReport {
         }
     };
 
-    if let Some(id) = external_subscription_id {
-        let notif_stream = client.notifications();
-        test_receive_published_note_from_subscription(published_id, id.clone(), notif_stream, &mut errors).await;
+    if let Some((id, timestamp)) = external_subscription {
+        test_receive_published_note_from_subscription(
+            client.notifications(),
+            published_id,
+            id.clone(),
+            client.keys().await.public_key(),
+            timestamp,
+            &mut errors,
+        )
+        .await;
 
-        relay.send_msg(ClientMessage::Close(id), None).await;
+        match relay.send_msg(ClientMessage::Close(id.clone()), None).await {
+            Ok(()) => info!("successfully closed new events subscription: {id}"),
+            Err(e) => log_and_store_error(anyhow!("failed to close subscription {id}: {e}"), &mut errors),
+        }
     }
 
-    drop(_s);
     drop(span);
 
     if !errors.is_empty() {
@@ -60,21 +59,22 @@ async fn test_establish_publish_subscription(
     relay: &Relay,
     pubkey: XOnlyPublicKey,
     errors: &mut Errors,
-) -> Option<SubscriptionId> {
+) -> Option<(SubscriptionId, Timestamp)> {
+    let timestamp = Timestamp::now();
+
     let subscription_result = relay
         .subscribe_with_internal_id(
             InternalSubscriptionId::Custom(PUBLISH_TEST_INTERNAL_SUBSCRIPTION_ID.to_string()),
             vec![nostr::Filter::new()
                 .author(pubkey)
                 .kind(Kind::TextNote)
-                .since(Timestamp::now())],
+                .since(timestamp)],
             None,
         )
         .await;
 
     match subscription_result {
         Ok(()) => {
-            info!("successfully established new event subscription");
             let external_id = relay
                 .subscriptions()
                 .await
@@ -83,7 +83,9 @@ async fn test_establish_publish_subscription(
                 ))?
                 .id();
 
-            Some(external_id)
+            info!("successfully established new events subscription with ID {external_id}");
+
+            Some((external_id, timestamp))
         }
         Err(e) => {
             log_and_store_error(anyhow!("failed to create new events subscription: {e}"), errors);
@@ -94,47 +96,86 @@ async fn test_establish_publish_subscription(
 
 // TODO: Complete checks
 async fn test_receive_published_note_from_subscription(
+    mut notifications_stream: Receiver<RelayPoolNotification>,
     published_event_id: Option<EventId>,
     external_subscription_id: SubscriptionId,
-    mut notifications_stream: Receiver<RelayPoolNotification>,
+    pubkey: XOnlyPublicKey,
+    filter_since_timestamp: Timestamp,
     errors: &mut Errors,
 ) {
     while let Ok(notification) = notifications_stream.recv().await {
-        if let RelayPoolNotification::Message { message, .. } = notification {
-            let mut check_subscription_id = |subscription_id: &SubscriptionId| {
-                if !subscription_id.eq(&external_subscription_id) {
-                    log_and_store_error(anyhow!("incorrect subscription id: {subscription_id}"), errors);
+        if let RelayPoolNotification::Message {
+            message: relay_message, ..
+        } = notification
+        {
+            let relay_message = &relay_message;
+
+            // Check subscription ID for all messages that come with one
+            match relay_message {
+                RelayMessage::Event { subscription_id, .. }
+                | RelayMessage::Closed { subscription_id, .. }
+                | RelayMessage::Count { subscription_id, .. }
+                | RelayMessage::EndOfStoredEvents(subscription_id) => {
+                    // TODO: Check if nostr-sdk lets messages with unknown subscription IDs through.
+                    if !subscription_id.eq(&external_subscription_id) {
+                        log_and_store_error(anyhow!("received message with subscription id {subscription_id} (expected {external_subscription_id}): {relay_message:#?}"), errors);
+                    }
                 }
-            };
+                _ => {}
+            }
 
-            match message {
-                RelayMessage::Event { subscription_id, event } => {
-                    check_subscription_id(&subscription_id);
-
+            // Perform checks unique to each message type
+            match relay_message {
+                RelayMessage::Event { event, .. } => {
                     if matches!(published_event_id, Some(id) if id.eq(&event.id)) {
                         info!("received published event from subscription: {event:#?}");
-                        break;
+                        return;
                     }
 
                     if event.kind != Kind::TextNote {
                         log_and_store_error(anyhow!("received event of kind other than 1: {event:#?}"), errors);
+                    }
+
+                    if event.pubkey != pubkey {
+                        log_and_store_error(
+                            anyhow!(
+                                "received event with author {} (expected {pubkey}): {event:#?}",
+                                event.pubkey
+                            ),
+                            errors,
+                        );
+                    }
+
+                    if event.created_at < filter_since_timestamp {
+                        log_and_store_error(
+                            anyhow!(
+                                "Received event with timestamp {} (expected >= {filter_since_timestamp}): {event:#?}",
+                                event.created_at
+                            ),
+                            errors,
+                        );
                     }
                 }
                 RelayMessage::Closed {
                     subscription_id,
                     message,
                 } => {
-                    check_subscription_id(&subscription_id);
                     log_and_store_error(
                         anyhow!("relay closed subscription \"{subscription_id}\" unexpectedly: {message}"),
                         errors,
                     );
+
+                    return;
                 }
-                RelayMessage::Notice { message } => todo!(),
+                RelayMessage::Notice { message } => warn!("received NOTICE event from relay: {message}"),
                 RelayMessage::Ok { .. } => todo!(),
-                RelayMessage::Count { subscription_id, .. } | RelayMessage::EndOfStoredEvents(subscription_id) => {
-                    todo!()
+                RelayMessage::EndOfStoredEvents(subscription_id) => {
+                    info!("received EOSE event for subscription: {subscription_id}")
                 }
+                RelayMessage::Count { subscription_id, count } => log_and_store_error(
+                    anyhow!("received unexpected COUNT event for subscription {subscription_id}: {count}"),
+                    errors,
+                ),
                 _ => {}
             }
         }
