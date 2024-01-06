@@ -5,7 +5,8 @@ use tokio::sync::broadcast::Receiver;
 
 use crate::tests::prelude::*;
 
-static PUBLISH_TEST_INTERNAL_SUBSCRIPTION_ID: Lazy<SubscriptionId> = Lazy::new(|| SubscriptionId::new("publish_test"));
+static PUBLISH_TEST_INTERNAL_SUBSCRIPTION_ID: Lazy<InternalSubscriptionId> =
+    Lazy::new(|| InternalSubscriptionId::Custom("publish_test".to_owned()));
 
 pub async fn test(client: &NostrClient, relay: &Relay) -> TestReport {
     let span = span!(Level::INFO, "nip01: publishing event").entered();
@@ -64,7 +65,7 @@ async fn test_establish_publish_subscription(
 
     let subscription_result = relay
         .subscribe_with_internal_id(
-            InternalSubscriptionId::Custom(PUBLISH_TEST_INTERNAL_SUBSCRIPTION_ID.to_string()),
+            PUBLISH_TEST_INTERNAL_SUBSCRIPTION_ID.clone(),
             vec![nostr::Filter::new()
                 .author(pubkey)
                 .kind(Kind::TextNote)
@@ -78,9 +79,7 @@ async fn test_establish_publish_subscription(
             let external_id = relay
                 .subscriptions()
                 .await
-                .get(&InternalSubscriptionId::Custom(
-                    PUBLISH_TEST_INTERNAL_SUBSCRIPTION_ID.to_string(),
-                ))?
+                .get(&PUBLISH_TEST_INTERNAL_SUBSCRIPTION_ID)?
                 .id();
 
             info!("successfully established new events subscription with ID {external_id}");
