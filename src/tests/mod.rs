@@ -1,6 +1,8 @@
+mod logger;
 pub mod report;
 
 pub mod nip01;
+pub mod nip02;
 pub mod nip09;
 
 use color_eyre::eyre;
@@ -39,18 +41,53 @@ pub async fn run(Config { key, nips, relay_url }: Config) -> eyre::Result<Vec<Te
 mod prelude {
     pub use crate::{
         config::Nips,
-        tests::report::{Errors, TestReport},
+        tests::{
+            logger::{LogEvent, Logger},
+            report::{Errors, TestReport},
+        },
         NostrClient,
     };
     pub use color_eyre::eyre::anyhow;
-    pub use nostr::{ClientMessage, EventId, RelayMessage};
-    pub use nostr_sdk::{Relay, RelayPoolNotification};
-    pub use tracing::{info, span, warn, Level};
+    pub use nostr::{ClientMessage, EventId, Kind, RelayMessage, SubscriptionId, Timestamp};
+    pub use nostr_sdk::{InternalSubscriptionId, Relay, RelayPoolNotification};
+    pub use once_cell::sync::Lazy;
+    pub use tracing::{span, Level};
 
-    use color_eyre::eyre;
+    /// Adds timestamp constraint to the filter and establishes a subscription,
+    /// returning its external ID and the aforementioned timestamp if the
+    /// subscription was successfully established.
+    pub(super) async fn establish_subscription(
+        name: &str,
+        relay: &Relay,
+        internal_id: InternalSubscriptionId,
+        filter: nostr::Filter,
+        logger: &mut Logger,
+    ) -> Option<(SubscriptionId, Timestamp)> {
+        let timestamp = Timestamp::now();
 
-    pub(super) fn log_and_store_error(err: eyre::Error, errors_vec: &mut Errors) {
-        tracing::error!("{err}");
-        errors_vec.push(err);
+        let subscription_result = relay
+            .subscribe_with_internal_id(internal_id.clone(), vec![filter.since(timestamp)], None)
+            .await;
+
+        match subscription_result {
+            Ok(()) => {
+                let external_id = relay.subscription(&internal_id).await?.id();
+
+                logger.log(LogEvent::EstablishedSubscription(name, &external_id));
+
+                Some((external_id, timestamp))
+            }
+            Err(error) => {
+                logger.log(LogEvent::FailedToEstablishSubscription(name, &error));
+                None
+            }
+        }
+    }
+
+    pub(super) async fn close_subscription(name: &str, relay: &Relay, id: SubscriptionId, logger: &mut Logger) {
+        match relay.send_msg(ClientMessage::Close(id.clone()), None).await {
+            Ok(()) => logger.log(LogEvent::ClosedSubscription(name, &id)),
+            Err(error) => logger.log(LogEvent::FailedToCloseSubscription(name, &id, &error)),
+        }
     }
 }

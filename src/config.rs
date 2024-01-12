@@ -83,6 +83,7 @@ impl<'de> Deserialize<'de> for NostrKeys {
 /// Supported NIPs
 pub enum Nips {
     Nip01,
+    Nip02,
     Nip09,
 }
 
@@ -101,7 +102,7 @@ impl Nips {
             }
         }
 
-        match_and_test!(01 09)
+        match_and_test!(01 02 09)
     }
 }
 
@@ -111,6 +112,7 @@ impl FromStr for Nips {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "nip01" => Ok(Nips::Nip01),
+            "nip02" => Ok(Nips::Nip02),
             "nip09" => Ok(Nips::Nip09),
             _ => Err(anyhow!("Not a supported NIP: {s}")),
         }
