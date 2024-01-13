@@ -157,7 +157,7 @@ async fn test_receive_published_note_from_subscription(
                     logger.log(LogEvent::ReceivedEndOfStoredEvents(subscription_id));
                 }
                 RelayMessage::Count { subscription_id, count } => {
-                    logger.log(LogEvent::UnexpectedCountEvent(subscription_id, *count))
+                    logger.log(LogEvent::UnexpectedCountEvent(subscription_id, *count));
                 }
                 _ => {}
             }

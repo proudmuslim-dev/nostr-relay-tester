@@ -21,24 +21,24 @@ impl Logger {
     pub fn log(&mut self, event: LogEvent) {
         match event {
             LogEvent::EstablishedSubscription(name, id) => {
-                info!("successfully established {name} subscription with id {id}")
+                info!("successfully established {name} subscription with id {id}");
             }
             LogEvent::FailedToEstablishSubscription(name, error) => {
-                self.print_and_store_error(anyhow!("failed to create {name} subscription: {error}"))
+                self.print_and_store_error(anyhow!("failed to create {name} subscription: {error}"));
             }
             LogEvent::ClosedSubscription(name, id) => info!("successfully closed {name} subscription: {id}"),
             LogEvent::FailedToCloseSubscription(name, id, error) => {
-                self.print_and_store_error(anyhow!("failed to close {name} subscription \"{id}\": {error}"))
+                self.print_and_store_error(anyhow!("failed to close {name} subscription \"{id}\": {error}"));
             }
             LogEvent::PublishedEvent(event_id) => info!("successfully published event: {event_id}"),
             LogEvent::FailedToPublishEvent(client_error) => {
-                self.print_and_store_error(anyhow!("failed to publish event: {client_error}"))
+                self.print_and_store_error(anyhow!("failed to publish event: {client_error}"));
             }
             LogEvent::ReceivedExpectedEvent(name, event) => {
-                info!("received {name} event from subscription: {event:#?}")
+                info!("received {name} event from subscription: {event:#?}");
             }
             LogEvent::ReceivedEndOfStoredEvents(subscription_id) => {
-                info!("received EOSE event for subscription: {subscription_id}")
+                info!("received EOSE event for subscription: {subscription_id}");
             }
             LogEvent::ReceivedNoticeEvent(message) => warn!("received NOTICE event from relay: {message}"),
             LogEvent::UnexpectedOkEvent(event_id, relay_message) => self.print_and_store_error(anyhow!(
@@ -48,7 +48,7 @@ impl Logger {
                 "received unexpected COUNT event for subscription \"{subscription_id}\": {count}"
             )),
             LogEvent::UnknownSubscriptionClosed(id, message) => {
-                self.print_and_store_error(anyhow!("relay closed unknown subscription \"{id}\": {message}"))
+                self.print_and_store_error(anyhow!("relay closed unknown subscription \"{id}\": {message}"));
             }
             LogEvent::UnknownSubscriptionId {
                 expected_id,
@@ -101,6 +101,7 @@ impl From<Logger> for TestReport {
     }
 }
 
+#[derive(Copy, Clone)]
 pub enum LogEvent<'a> {
     EstablishedSubscription(&'a str, &'a SubscriptionId),
     FailedToEstablishSubscription(&'a str, &'a nostr_sdk::relay::Error),
